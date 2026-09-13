@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 — 2026-09-13
+
+- **Fix:** the pf readiness fixes appended the anchors to the end of
+  `/etc/pf.conf`. On a host with `pass`/`block` rules that put translation
+  after filtering, pf rejected the whole file and the rc script left pf
+  running with nothing loaded — all NAT gone at once. The snippet now
+  inserts before the first filter rule and validates with `pfctl -nf`
+  before loading. If you pasted the 0.2.0 fix: move the anchor lines above
+  your filter rules and `pfctl -f /etc/pf.conf`.
+- Release tarballs are reproducible and never replaced on a re-run.
+
 ## 0.2.0 — 2026-09-13
 
 First release under `daemonless/fjord`. Default port moved from 9443 (Portainer's)
