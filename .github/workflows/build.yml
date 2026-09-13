@@ -99,7 +99,11 @@ jobs:
           git archive HEAD | tar -x -C "$STAGE"       # tracked source
           cp -R vendor "$STAGE/"                       # offline Go modules
           mkdir -p "$STAGE/ui"; cp -R ui/dist "$STAGE/ui/"  # prebuilt, embedded UI
-          tar czf "fjord-${VERSION}.tar.gz" "$STAGE"
+          # Reproducible: same tag -> same bytes, so a re-run can never change
+          # the checksum a port's distinfo already records.
+          tar --sort=name --mtime="@$(git log -1 --format=%ct)" --owner=0 --group=0 --numeric-owner \
+            -cf - "$STAGE" | gzip -n > "fjord-${VERSION}.tar.gz"
+          sha256sum "fjord-${VERSION}.tar.gz"
 
       # One binary per FreeBSD arch, named so `fetch .../fjordd-freebsd-$(uname -m)`
       # picks the right one. The rc script ships alongside.
@@ -125,6 +129,11 @@ jobs:
           VERSION="${TAG#v}"
           ASSETS="fjord-${VERSION}.tar.gz fjordd-freebsd-amd64 fjordd-freebsd-arm64 fjordd.rc"
           if gh release view "${TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            # A published tarball is immutable (ports pin its checksum): only
+            # the binaries and rc script are refreshed on a re-run.
+            if gh release view "${TAG}" --repo "${{ github.repository }}" --json assets --jq '.assets[].name' | grep -qx "fjord-${VERSION}.tar.gz"; then
+              ASSETS="fjordd-freebsd-amd64 fjordd-freebsd-arm64 fjordd.rc"
+            fi
             gh release upload "${TAG}" --repo "${{ github.repository }}" --clobber $ASSETS
           else
             gh release create "${TAG}" \

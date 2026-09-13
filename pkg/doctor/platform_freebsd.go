@@ -121,20 +121,34 @@ func pfFix() string {
 			s += "#   " + r + "\n"
 		}
 		return s +
-			"# they are just not loaded -- reload the ruleset\n" +
+			"# they are just not loaded -- validate, then reload the ruleset\n" +
+			"pfctl -nf /etc/pf.conf\n" +
 			"pfctl -f /etc/pf.conf\n" +
 			"# pf not enabled at all?\n" +
 			"sysrc pf_enable=YES\n" +
 			"service pf start"
 	}
 	return "# /etc/pf.conf is missing podman's anchors -- add them once (" + ifc + " = your LAN interface)\n" +
-		"cat >> /etc/pf.conf <<'EOF'\n" +
-		strings.Join(rules, "\n") + "\n" +
-		"EOF\n" +
+		pfInsertSnippet(rules) +
 		"sysrc pf_enable=YES\n" +
 		"service pf start\n" +
 		"# already running? reload instead\n" +
 		"pfctl -f /etc/pf.conf"
+}
+
+// pfInsertSnippet returns shell that adds translation rules to /etc/pf.conf in
+// the right place: before the first filter rule (pass/block/match/antispoof/
+// anchor), or at the end when there are none. pf rejects the whole file when a
+// nat/rdr anchor follows a filter rule ("Rules must be in order") and the rc
+// script then leaves pf running with NOTHING loaded -- appending at the end
+// did exactly that on a host with pass rules. The load is validated first so
+// a mistake is shown instead of silently unloading the firewall.
+func pfInsertSnippet(rules []string) string {
+	add := strings.ReplaceAll(strings.Join(rules, "\\n"), "'", "'\\''")
+	return "awk -v add='" + add + "' '\n" +
+		"  !done && /^(pass|block|match|antispoof|anchor)[[:space:]]/ { print add; done=1 } { print }\n" +
+		"  END { if (!done) print add }' /etc/pf.conf > /etc/pf.conf.new && mv /etc/pf.conf.new /etc/pf.conf\n" +
+		"pfctl -nf /etc/pf.conf   # validate before loading\n"
 }
 
 // appjailPfProbe checks pf carries AppJail's NAT/rdr anchors, which its
@@ -171,10 +185,10 @@ func appjailPfFix() string {
 		for _, r := range rules {
 			s += "#   " + r + "\n"
 		}
-		return s + "# they are just not loaded -- reload the ruleset\npfctl -f /etc/pf.conf\n# pf not enabled at all?\nsysrc pf_enable=YES\nservice pf start"
+		return s + "# they are just not loaded -- validate, then reload the ruleset\npfctl -nf /etc/pf.conf\npfctl -f /etc/pf.conf\n# pf not enabled at all?\nsysrc pf_enable=YES\nservice pf start"
 	}
 	return "# /etc/pf.conf is missing AppJail's anchors -- add them once\n" +
-		"cat >> /etc/pf.conf <<'EOF'\n" + strings.Join(rules, "\n") + "\nEOF\n" +
+		pfInsertSnippet(rules) +
 		"sysrc pf_enable=YES\nservice pf start\n# already running? reload instead\npfctl -f /etc/pf.conf"
 }
 
