@@ -1,0 +1,149 @@
+package compose
+
+import (
+	"bytes"
+	"fmt"
+	"strings"
+
+	"gopkg.in/yaml.v3"
+)
+
+// SetImageTag rewrites every service's image tag to tag (e.g. "pkg", "1.5.5").
+// A blank tag is a no-op. Used at install time so a catalog app can be deployed
+// on a chosen variant/version instead of the manifest's default.
+func SetImageTag(composeYAML, tag string) (string, error) {
+	if tag == "" {
+		return composeYAML, nil
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(composeYAML), &doc); err != nil {
+		return "", fmt.Errorf("parse compose: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("compose is not a YAML mapping")
+	}
+	services := mapGet(doc.Content[0], "services")
+	if services == nil || services.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("compose has no services")
+	}
+	for i := 1; i < len(services.Content); i += 2 {
+		svc := services.Content[i]
+		if svc.Kind != yaml.MappingNode {
+			continue
+		}
+		if img := mapGet(svc, "image"); img != nil && img.Kind == yaml.ScalarNode {
+			img.Value = replaceTag(img.Value, tag)
+			img.Style = 0
+		}
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(doc.Content[0]); err != nil {
+		return "", err
+	}
+	enc.Close()
+	return buf.String(), nil
+}
+
+// ServiceImages returns every service's image ref, in service order. Used for
+// update detection, which must consider all of a stack's images (Update pulls
+// them all), not just the first.
+func ServiceImages(composeYAML string) ([]string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(composeYAML), &doc); err != nil {
+		return nil, fmt.Errorf("parse compose: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return nil, nil
+	}
+	services := mapGet(doc.Content[0], "services")
+	if services == nil || services.Kind != yaml.MappingNode {
+		return nil, nil
+	}
+	var out []string
+	for i := 1; i < len(services.Content); i += 2 {
+		svc := services.Content[i]
+		if svc.Kind != yaml.MappingNode {
+			continue
+		}
+		if img := mapGet(svc, "image"); img != nil && img.Kind == yaml.ScalarNode && img.Value != "" {
+			out = append(out, img.Value)
+		}
+	}
+	return out, nil
+}
+
+// eachServiceImage walks the compose and calls fn on every service's image
+// scalar node, replacing it with fn's return value. Returns the re-encoded YAML.
+func eachServiceImage(composeYAML string, fn func(image string) (string, error)) (string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal([]byte(composeYAML), &doc); err != nil {
+		return "", fmt.Errorf("parse compose: %w", err)
+	}
+	if len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
+		return "", fmt.Errorf("compose is not a YAML mapping")
+	}
+	services := mapGet(doc.Content[0], "services")
+	if services == nil || services.Kind != yaml.MappingNode {
+		return "", fmt.Errorf("compose has no services")
+	}
+	for i := 1; i < len(services.Content); i += 2 {
+		svc := services.Content[i]
+		if svc.Kind != yaml.MappingNode {
+			continue
+		}
+		img := mapGet(svc, "image")
+		if img == nil || img.Kind != yaml.ScalarNode {
+			continue
+		}
+		nv, err := fn(img.Value)
+		if err != nil {
+			return "", err
+		}
+		img.Value = nv
+		img.Style = 0
+	}
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(doc.Content[0]); err != nil {
+		return "", err
+	}
+	enc.Close()
+	return buf.String(), nil
+}
+
+// PinImageDigests pins every service image to an exact digest, resolved per
+// service by resolve (given the current "repo:tag" ref). The result keeps the
+// human-readable tag: "repo:tag" -> "repo:tag@sha256:...". Any pre-existing
+// digest is re-resolved from the live tag, so re-pinning refreshes it.
+func PinImageDigests(composeYAML string, resolve func(ref string) (string, error)) (string, error) {
+	return eachServiceImage(composeYAML, func(image string) (string, error) {
+		ref := image
+		if at := strings.LastIndex(ref, "@"); at >= 0 {
+			ref = ref[:at] // strip any existing digest; re-resolve from the tag
+		}
+		digest, err := resolve(ref)
+		if err != nil {
+			return "", err
+		}
+		return ref + "@" + digest, nil
+	})
+}
+
+// replaceTag swaps the tag on an image reference, preserving the registry/repo
+// (and dropping any existing tag or @digest). e.g.
+// "ghcr.io/daemonless/radarr:latest" + "pkg" -> "ghcr.io/daemonless/radarr:pkg".
+func replaceTag(image, tag string) string {
+	ref := image
+	if at := strings.LastIndex(ref, "@"); at >= 0 {
+		ref = ref[:at]
+	}
+	slash := strings.LastIndex(ref, "/")
+	if colon := strings.LastIndex(ref, ":"); colon > slash {
+		ref = ref[:colon]
+	}
+	return ref + ":" + tag
+}

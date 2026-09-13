@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daemonless.io/schemas/fjord-catalog-v1.json",
+  "title": "Fjord Catalog",
+  "description": "Schema for Fjord catalog.json",
+  "type": "object",
+  "required": ["catalog_name", "fjord_version", "maintainer", "generated", "apps"],
+  "properties": {
+    "catalog_name": { "type": "string" },
+    "fjord_version": { "type": "string" },
+    "maintainer": { "type": "string" },
+    "generated": { "type": "string", "format": "date-time" },
+    "apps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "category", "icon", "manifest_url", "version", "variants"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+          "name": { "type": "string" },
+          "description": { "type": "string" },
+          "category": { "type": "string" },
+          "class": { "type": "string", "enum": ["service", "agent", "cli"] },
+          "icon": { "type": "string", "format": "uri" },
+          "manifest_url": { "type": "string", "format": "uri" },
+          "version": { "type": "string" },
+          "updated": { "type": "string", "format": "date-time" },
+          "only_for_archs": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "variants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["id", "label", "image"],
+              "properties": {
+                "id": { "type": "string" },
+                "label": { "type": "string" },
+                "default": { "type": "boolean" },
+                "image": { "type": "string" },
+                "version": { "type": "string" }
+              }
+            },
+            "minItems": 1
+          }
+        }
+      }
+    }
+  }
+}

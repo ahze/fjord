@@ -1,0 +1,304 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import Icon from './Icon.svelte';
+  import Spinner from './Spinner.svelte';
+  import EmptyState from './EmptyState.svelte';
+  import FixSnippet from './FixSnippet.svelte';
+  import { toast } from './toast';
+
+  type CheckResult = {
+    id: string;
+    name: string;
+    status: 'ok' | 'warn' | 'fail' | 'unknown';
+    detail?: string;
+    why?: string;
+    fix?: string;
+  };
+  type Report = {
+    os: string;
+    mode: string;
+    canInstall: boolean;
+    checks: CheckResult[];
+  };
+
+  let report: Report | null = null;
+  let engineName = '';
+  let daemonVersion = '';
+  let loading = true;
+  let error = '';
+
+  async function load() {
+    loading = true;
+    error = '';
+    try {
+      const [setupRes, engineRes, aboutRes] = await Promise.all([
+        fetch('/api/setup'),
+        fetch('/api/engine'),
+        fetch('/api/about'),
+      ]);
+      if (!setupRes.ok) throw new Error(await setupRes.text());
+      report = await setupRes.json();
+      if (engineRes.ok) engineName = (await engineRes.json()).default || '';
+      if (aboutRes.ok) daemonVersion = (await aboutRes.json()).version || '';
+    } catch (e: any) {
+      error = e.message || 'Failed to load system report';
+    } finally {
+      loading = false;
+    }
+  }
+
+  // ---- storage cleanup (prune) ----
+  // Per engine: the default engine is preselected; the picker appears when more
+  // than one is enabled. Each engine reports which categories it can prune.
+  type DiskRow = { type: string; total: number; active: number; size: string; reclaimable: string; rawReclaimable: number; note?: string };
+  type Caps = { containers: boolean; images: boolean; allImages: boolean; volumes: boolean; networks: boolean; build: boolean };
+  let df: DiskRow[] = [];
+  let caps: Caps = { containers: false, images: false, allImages: false, volumes: false, networks: false, build: false };
+  let pruneEngines: string[] = [];
+  let pruneEngine = '';
+  let pruneOpts = { containers: true, images: true, allImages: false, volumes: false, networks: false, build: false };
+  let pruning = false;
+  let confirmPrune = false;
+  let dfLoading = false;
+  async function loadDf() {
+    dfLoading = true;
+    try {
+      const r = await fetch('/api/maintenance/df' + (pruneEngine ? `?engine=${encodeURIComponent(pruneEngine)}` : ''));
+      if (r.ok) {
+        const d = await r.json();
+        df = d.rows || [];
+        caps = d.capabilities || caps;
+        if (!pruneEngine) pruneEngine = d.engine || '';
+      }
+    } catch {}
+    dfLoading = false;
+  }
+  async function loadPruneEngines() {
+    try {
+      const r = await fetch('/api/engine');
+      if (r.ok) pruneEngines = ((await r.json()).engines || []).filter((e: any) => e.enabled).map((e: any) => e.name);
+    } catch {}
+  }
+  async function pickPruneEngine(name: string) {
+    pruneEngine = name;
+    confirmPrune = false;
+    await loadDf();
+  }
+  // Build leftovers go through `system prune --build`, which also takes stopped
+  // containers, dangling images and unused networks; reflect that in the boxes.
+  $: if (pruneOpts.build) pruneOpts.containers = pruneOpts.images = pruneOpts.networks = true;
+  async function runPrune() {
+    confirmPrune = false;
+    pruning = true;
+    try {
+      const r = await fetch('/api/maintenance/prune', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine: pruneEngine, ...pruneOpts }),
+      });
+      if (!r.ok) throw new Error((await r.text()).trim() || `HTTP ${r.status}`);
+      const rep = await r.json();
+      toast(rep.reclaimed ? `Reclaimed ${rep.reclaimed}` : 'Cleanup complete', { kind: 'success' });
+      await loadDf();
+    } catch (e: any) {
+      toast(e.message || 'Cleanup failed', { kind: 'error' });
+    } finally {
+      pruning = false;
+    }
+  }
+  $: anyPrune =
+    (caps.containers && pruneOpts.containers) || (caps.images && pruneOpts.images) || (caps.allImages && pruneOpts.allImages) ||
+    (caps.volumes && pruneOpts.volumes) || (caps.networks && pruneOpts.networks) || (caps.build && pruneOpts.build);
+
+  onMount(() => {
+    load();
+    loadDf();
+    loadPruneEngines();
+  });
+
+  const STATUS = {
+    ok: { icon: 'check', cls: 'text-fjord-success', label: 'OK' },
+    warn: { icon: 'alert', cls: 'text-fjord-warning', label: 'Warning' },
+    fail: { icon: 'alert', cls: 'text-fjord-danger', label: 'Failed' },
+    unknown: { icon: 'alert', cls: 'text-slate-500', label: 'Unverified' },
+  } as const;
+
+  $: failCount = report?.checks.filter((c) => c.status === 'fail').length ?? 0;
+
+  function copyFix(fix: string) {
+    navigator.clipboard.writeText(fix);
+    toast('Command copied', { kind: 'success' });
+  }
+</script>
+
+<div class="flex flex-col h-full">
+  <div class="flex items-center justify-between mb-4 shrink-0">
+    <div>
+      <h2 class="text-2xl font-bold text-white">System</h2>
+      <p class="text-sm text-slate-500">Host readiness — platform, deployment mode, and engine requirements.</p>
+    </div>
+    <button
+      on:click={load}
+      class="flex items-center gap-2 bg-fjord-card hover:bg-fjord-border border border-fjord-border text-slate-300 font-medium py-2 px-4 rounded-lg text-sm"
+      ><Icon name="refresh" size={14} /> Re-check</button
+    >
+  </div>
+
+  <div class="flex-1 overflow-y-auto">
+    {#if loading}
+      <div class="flex items-center gap-3 text-slate-500 text-sm"><Spinner size={18} /> Running checks…</div>
+    {:else if error}
+      <EmptyState icon="alert" title="System Report Unavailable" description={error} />
+    {:else if report}
+      <div class="flex items-center gap-2 mb-4 flex-wrap">
+        {#if daemonVersion}
+          <span class="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-fjord-accent/15 text-fjord-accent border border-fjord-accent/40" title="fjordd daemon version">fjord {daemonVersion}</span>
+        {/if}
+        <span class="text-[11px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full bg-fjord-card border border-fjord-border text-slate-300">{report.os}</span>
+        <span
+          class="text-[11px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full border {report.mode === 'host'
+            ? 'bg-fjord-accent/15 text-fjord-accent border-fjord-accent/40'
+            : 'bg-fjord-card text-slate-400 border-fjord-border'}"
+          title={report.mode === 'host'
+            ? 'fjordd can see and repair the host directly'
+            : 'fjordd cannot see or repair the host from here — fixes are commands for the operator'}
+          >{report.mode === 'host'
+            ? 'running directly on the host'
+            : report.mode === 'container'
+              ? 'running in a container'
+              : 'deployment mode unknown'}</span
+        >
+        {#if engineName}
+          <span class="text-[11px] font-semibold uppercase tracking-wide px-2.5 py-1 rounded-full bg-fjord-card border border-fjord-border text-slate-300">default engine: {engineName}</span>
+        {/if}
+        {#if failCount > 0}
+          <span class="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-fjord-danger/15 text-fjord-danger border border-fjord-danger/40"
+            >{failCount} check{failCount === 1 ? '' : 's'} failing</span
+          >
+        {:else}
+          <span class="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-fjord-success/10 text-fjord-success border border-fjord-success/30">all checks passing</span>
+        {/if}
+      </div>
+
+      <div class="border border-fjord-border rounded-xl overflow-hidden divide-y divide-fjord-border">
+        {#each report.checks as c (c.id)}
+          <div class="px-4 py-3">
+            <div class="flex items-center gap-3">
+              <div class="shrink-0 {STATUS[c.status].cls}" title={STATUS[c.status].label}>
+                <Icon name={STATUS[c.status].icon} size={18} />
+              </div>
+              <div class="min-w-0 flex-1">
+                <span class="text-sm font-medium text-white">{c.name}</span>
+                {#if c.detail}
+                  <div class="text-xs text-slate-500 font-mono truncate" title={c.detail}>{c.detail}</div>
+                {/if}
+                {#if c.why}
+                  <div class="text-xs text-slate-500 mt-0.5">{c.why}</div>
+                {/if}
+              </div>
+              <span class="shrink-0 text-[11px] font-semibold uppercase tracking-wide {STATUS[c.status].cls}">{STATUS[c.status].label}</span>
+            </div>
+            {#if c.fix}
+              <div class="mt-2 ml-[30px]"><FixSnippet fix={c.fix} /></div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+
+      <!-- Storage cleanup (prune) -->
+      <h3 class="text-lg font-bold text-white mt-8 mb-1">Storage cleanup</h3>
+      <p class="text-sm text-slate-500 mb-3">
+        Reclaim disk held by resources no stack uses. What can be cleaned depends on the engine.
+      </p>
+      {#if pruneEngines.length > 1}
+        <div class="flex items-center gap-1 mb-4 max-w-2xl">
+          {#each pruneEngines as e}
+            <button
+              on:click={() => pickPruneEngine(e)}
+              class="px-3 py-1.5 rounded-lg text-sm font-medium transition-colors {pruneEngine === e
+                ? 'bg-fjord-accent text-white'
+                : 'bg-fjord-card border border-fjord-border text-slate-300 hover:text-white'}">{e}{#if e === engineName}<span class="ml-1.5 text-[10px] uppercase tracking-wide opacity-70">default</span>{/if}</button>
+          {/each}
+        </div>
+      {:else if pruneEngine}
+        <div class="text-xs text-slate-500 mb-3">Engine: <b class="text-slate-400">{pruneEngine}</b></div>
+      {/if}
+
+      {#if dfLoading && !df.length}
+        <div class="flex items-center gap-2 text-slate-500 text-sm mb-4"><Spinner size={14} /> Measuring…</div>
+      {:else if df.length}
+        <div class="border border-fjord-border rounded-xl overflow-hidden divide-y divide-fjord-border mb-4 max-w-2xl transition-opacity {dfLoading ? 'opacity-50' : ''}">
+          {#each df as row}
+            <!-- One item per row so divide-y draws a single divider between
+                 rows; the note lives inside the row, not as a sibling. -->
+            <div class="px-4 py-2.5">
+              <div class="flex items-center gap-3 text-sm">
+                <span class="w-32 shrink-0 text-slate-300">{row.type}</span>
+                <span class="text-xs text-slate-500 w-28 shrink-0">{row.active}/{row.total} in use</span>
+                <span class="text-xs text-slate-500 flex-1 truncate">{row.size}</span>
+                <span class="shrink-0 text-xs font-semibold {row.rawReclaimable > 0 ? 'text-fjord-warning' : 'text-slate-600'}"
+                  >{row.reclaimable} reclaimable</span
+                >
+              </div>
+              {#if row.note}
+                <div class="mt-1.5 text-xs text-slate-500 leading-snug">{row.note}</div>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+
+      <div class="flex flex-wrap items-center gap-x-5 gap-y-2 mb-3 max-w-2xl">
+        {#if caps.containers}
+        <label class="flex items-center gap-1.5 text-sm text-slate-300 cursor-pointer select-none">
+          <input type="checkbox" bind:checked={pruneOpts.containers} disabled={pruneOpts.build} class="accent-fjord-accent" /> Stopped containers
+        </label>
+        {/if}
+        {#if caps.images}
+        <label class="flex items-center gap-1.5 text-sm text-slate-300 cursor-pointer select-none">
+          <input type="checkbox" bind:checked={pruneOpts.images} disabled={pruneOpts.build} class="accent-fjord-accent" /> Dangling images
+        </label>
+        {/if}
+        {#if caps.networks}
+        <label class="flex items-center gap-1.5 text-sm text-slate-300 cursor-pointer select-none" title="Networks no container is attached to">
+          <input type="checkbox" bind:checked={pruneOpts.networks} disabled={pruneOpts.build} class="accent-fjord-accent" /> Unused networks
+        </label>
+        {/if}
+        {#if caps.build}
+        <label class="flex items-center gap-1.5 text-sm text-slate-300 cursor-pointer select-none" title="Working containers and cache left behind by image builds. Includes stopped containers, dangling images and unused networks.">
+          <input type="checkbox" bind:checked={pruneOpts.build} class="accent-fjord-accent" /> Build leftovers
+        </label>
+        {/if}
+        {#if caps.allImages}
+        <label class="flex items-center gap-1.5 text-sm text-slate-300 cursor-pointer select-none" title="Removes every image not used by a container — they re-pull when next needed">
+          <input type="checkbox" bind:checked={pruneOpts.allImages} class="accent-fjord-accent" /> All unused images
+        </label>
+        {/if}
+        {#if caps.volumes}
+        <label class="flex items-center gap-1.5 text-sm cursor-pointer select-none {pruneOpts.volumes ? 'text-fjord-warning' : 'text-slate-300'}" title="Deletes volumes not attached to any container — this can destroy data">
+          <input type="checkbox" bind:checked={pruneOpts.volumes} class="accent-fjord-accent" /> Unused volumes
+        </label>
+        {/if}
+      </div>
+      {#if caps.volumes && pruneOpts.volumes}
+        <p class="text-xs text-fjord-warning mb-3 max-w-2xl">⚠ Unused volumes may hold real data — anything not currently mounted by a container will be deleted.</p>
+      {/if}
+
+      {#if confirmPrune}
+        <div class="flex items-center gap-3">
+          <span class="text-sm text-slate-300">Remove the selected unused resources now?</span>
+          <button on:click={runPrune} class="px-4 py-2 rounded-lg text-sm font-medium bg-fjord-danger hover:bg-fjord-danger-hover text-white">Confirm cleanup</button>
+          <button on:click={() => (confirmPrune = false)} class="px-4 py-2 rounded-lg text-sm font-medium text-slate-400 hover:text-white">Cancel</button>
+        </div>
+      {:else}
+        <button
+          on:click={() => (confirmPrune = true)}
+          disabled={pruning || !anyPrune}
+          class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-fjord-border hover:bg-fjord-danger hover:text-white transition-colors disabled:opacity-40"
+        >
+          {#if pruning}<Spinner size={14} /> Cleaning…{:else}<Icon name="trash" size={14} /> Clean up{/if}
+        </button>
+      {/if}
+    {/if}
+  </div>
+</div>

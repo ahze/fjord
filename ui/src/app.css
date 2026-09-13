@@ -1,0 +1,33 @@
+@import "tailwindcss";
+
+/* GNOME HIG-adjacent palette: accent/success/danger/warning from the GNOME
+ * color palette (Blue 3, Green 3, Red 2, Yellow 2); neutral surfaces lifted
+ * toward libadwaita dark instead of near-black zinc. */
+@theme {
+  --color-fjord-bg: #1d1d20;
+  --color-fjord-card: #28282c;
+  --color-fjord-border: #3b3b40;
+  --color-fjord-inset: #161619; /* form fields, terminals, editors */
+  --color-fjord-accent: #3584e4;
+  --color-fjord-accent-hover: #4a90e9; /* dark theme: hover lightens */
+  --color-fjord-success: #33d17a;
+  --color-fjord-danger: #ed333b;
+  --color-fjord-danger-hover: #f24d53;
+  --color-fjord-warning: #f8e45c;
+}
+
+body {
+  @apply bg-fjord-bg text-slate-200 antialiased;
+}
+
+/* Visible keyboard focus (HIG: keyboard navigation must be discoverable).
+ * Text fields keep their border-accent treatment instead of a ring. */
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-fjord-accent) 75%, transparent);
+  outline-offset: 1px;
+}
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}

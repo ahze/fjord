@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://daemonless.io/schemas/fjord-compose-v1.json",
+  "title": "Fjord Compose Manifest",
+  "description": "Schema for a compose.yaml file containing an x-fjord manifest block",
+  "type": "object",
+  "required": ["x-fjord"],
+  "properties": {
+    "x-fjord": {
+      "type": "object",
+      "required": ["version", "info"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "enum": ["0.1"]
+        },
+        "info": {
+          "type": "object",
+          "required": ["id", "name", "description", "category", "class", "icon"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+            "name": { "type": "string" },
+            "description": { "type": "string" },
+            "category": { "type": "string" },
+            "class": { "type": "string", "enum": ["service", "agent", "cli"] },
+            "icon": { "type": "string", "format": "uri" },
+            "web_port": { "type": "string" },
+            "health_url": { "type": "string" },
+            "version": { "type": "string" },
+            "only_for_archs": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "requires": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "optional": { "type": "boolean" },
+                  "reason": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "host": {
+          "type": "object",
+          "properties": {
+            "min_freebsd_version": { "type": "string" },
+            "vnet_required": { "type": "boolean" },
+            "vnet_bridge": { "type": "string" },
+            "devfs_rules": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        },
+        "variables": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "label", "type"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[A-Z0-9_]+$" },
+              "label": { "type": "string" },
+              "type": {
+                "type": "string",
+                "enum": ["string", "port", "path", "zfs_dataset", "secret", "network_interface"]
+              },
+              "default": { "type": "string" },
+              "optional": { "type": "boolean" },
+              "level": { "type": "string", "enum": ["primary", "options", "advanced"] },
+              "description": { "type": "string" },
+              "zfs_properties": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              },
+              "host_permissions": {
+                "type": "object",
+                "required": ["uid", "gid", "mode"],
+                "properties": {
+                  "uid": { "type": "integer" },
+                  "gid": { "type": "integer" },
+                  "mode": { "type": "string", "pattern": "^[0-7]{3,4}$" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

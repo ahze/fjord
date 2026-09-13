@@ -1,0 +1,136 @@
+package compose
+
+import (
+	"strings"
+	"testing"
+
+	"gopkg.in/yaml.v3"
+)
+
+// The caddy compose from the dogfood session -- single service, a comment, and
+// host port publishing that collides on a busy host.
+const caddyCompose = `services:
+  caddy:
+    image: "ghcr.io/daemonless/caddy:latest"
+    container_name: caddy
+    environment:
+      - TZ=UTC  # Timezone for the container
+    volumes:
+      - "/containers/caddy:/config"
+    ports:
+      - "80:80"
+    restart: unless-stopped
+`
+
+// mustParse fails the test if the string isn't valid YAML.
+func mustParse(t *testing.T, s string) map[string]any {
+	t.Helper()
+	var m map[string]any
+	if err := yaml.Unmarshal([]byte(s), &m); err != nil {
+		t.Fatalf("result is not valid YAML: %v\n%s", err, s)
+	}
+	return m
+}
+
+func TestInjectNetworkStaticIP(t *testing.T) {
+	out, err := InjectNetwork(caddyCompose, "vlan5", "192.168.5.50")
+	if err != nil {
+		t.Fatalf("InjectNetwork: %v", err)
+	}
+	m := mustParse(t, out)
+
+	// Top-level networks: {vlan5: {external: true}}
+	nets, _ := m["networks"].(map[string]any)
+	v5, _ := nets["vlan5"].(map[string]any)
+	if v5["external"] != true {
+		t.Fatalf("top-level networks.vlan5.external not true: %+v", m["networks"])
+	}
+
+	// Service attached with the static IP.
+	svc := m["services"].(map[string]any)["caddy"].(map[string]any)
+	snet := svc["networks"].(map[string]any)["vlan5"].(map[string]any)
+	if snet["ipv4_address"] != "192.168.5.50" {
+		t.Fatalf("service ipv4_address not set: %+v", svc["networks"])
+	}
+
+	// Comment must survive the round-trip.
+	if !strings.Contains(out, "# Timezone for the container") {
+		t.Fatalf("comment lost in round-trip:\n%s", out)
+	}
+}
+
+func TestInjectNetworkAutoAssign(t *testing.T) {
+	out, err := InjectNetwork(caddyCompose, "vlan5", "")
+	if err != nil {
+		t.Fatalf("InjectNetwork: %v", err)
+	}
+	m := mustParse(t, out)
+	svc := m["services"].(map[string]any)["caddy"].(map[string]any)
+	list, ok := svc["networks"].([]any)
+	if !ok || len(list) != 1 || list[0] != "vlan5" {
+		t.Fatalf("auto-assign should use list form [vlan5], got: %+v", svc["networks"])
+	}
+}
+
+func TestInjectNetworkIPRequiresSingleService(t *testing.T) {
+	multi := `services:
+  a:
+    image: x
+  b:
+    image: y
+`
+	if _, err := InjectNetwork(multi, "vlan5", "192.168.5.50"); err == nil {
+		t.Fatal("expected error assigning a shared IP across two services")
+	}
+	// Auto-assign across multiple services is fine.
+	if _, err := InjectNetwork(multi, "vlan5", ""); err != nil {
+		t.Fatalf("auto-assign multi-service should succeed: %v", err)
+	}
+}
+
+func TestInjectNetworkRejectsExistingNetworks(t *testing.T) {
+	withNet := `services:
+  a:
+    image: x
+    networks:
+      - other
+`
+	if _, err := InjectNetwork(withNet, "vlan5", ""); err == nil {
+		t.Fatal("expected error when a service already declares networks")
+	}
+}
+
+func TestSplitPortSpecAndParsePort(t *testing.T) {
+	cases := map[string][2]string{
+		"80":                {"80", "80"},
+		"8080:80":           {"8080", "80"},
+		"127.0.0.1:8080:80": {"8080", "80"},
+		"[::1]:8443:443":    {"8443", "443"},
+		"0.0.0.0:53:53":     {"53", "53"},
+	}
+	for in, want := range cases {
+		h, c := SplitPortSpec(in)
+		if h != want[0] || c != want[1] {
+			t.Errorf("%q: got %s,%s want %s,%s", in, h, c, want[0], want[1])
+		}
+	}
+	pm, ok := parsePort("127.0.0.1:5432:5432/tcp")
+	if !ok || pm.Host != 5432 || pm.Container != 5432 || pm.Proto != "tcp" {
+		t.Fatalf("ip-prefixed parsePort: %+v ok=%v", pm, ok)
+	}
+	ports := PublishedPorts("services:\n  db:\n    ports:\n      - \"127.0.0.1:5432:5432\"\n      - \"8080:80/udp\"\n", nil)
+	if len(ports) != 2 || ports[0].Host != 5432 || ports[1].Proto != "udp" {
+		t.Fatalf("PublishedPorts: %+v", ports)
+	}
+}
+
+func TestDropTopLevelKey(t *testing.T) {
+	in := "name: custom\nservices:\n  a:\n    image: x\n"
+	out := DropTopLevelKey(in, "name")
+	if strings.Contains(out, "name: custom") || !strings.Contains(out, "image: x") {
+		t.Fatalf("got %q", out)
+	}
+	if DropTopLevelKey(in, "absent") != in {
+		t.Fatal("absent key must leave input unchanged")
+	}
+}

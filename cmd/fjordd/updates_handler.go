@@ -1,0 +1,115 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"sync"
+	"time"
+
+	composepkg "github.com/daemonless/fjord/pkg/compose"
+	"github.com/daemonless/fjord/pkg/stack"
+	"github.com/daemonless/fjord/pkg/updates"
+)
+
+// resolvedImages returns a stack's service images with ${VAR}s expanded
+// against its .env -- refs like "immich-server:${IMMICH_TAG:-latest}" are
+// unresolvable at the registry otherwise and reported update state "unknown".
+func resolvedImages(st *stack.Stack) []string {
+	images, _ := composepkg.ServiceImages(st.Compose)
+	env := st.EnvMap()
+	for i := range images {
+		images[i] = composepkg.ExpandEnv(images[i], env)
+	}
+	return images
+}
+
+// fleetUpdates is a cached fleet-wide update check. Registry lookups are slow
+// and rate-limited, so results are cached and refreshed in the background
+// (single-flight); readers always get the current cache immediately.
+type fleetUpdates struct {
+	mu         sync.Mutex
+	results    map[string]updates.Status
+	checkedAt  time.Time
+	refreshing bool
+}
+
+const fleetCacheTTL = 30 * time.Minute
+
+// fleetResponse is the /api/updates wire format.
+type fleetResponse struct {
+	Stacks     map[string]updates.Status `json:"stacks"`
+	CheckedAt  string                    `json:"checkedAt,omitempty"`
+	Refreshing bool                      `json:"refreshing"`
+}
+
+// handleUpdates serves the cached fleet-wide update state. A stale cache (or
+// ?refresh=1) kicks a background refresh; the response never blocks on the
+// registry.
+func (s *server) handleUpdates(w http.ResponseWriter, r *http.Request) {
+	s.fleet.mu.Lock()
+	stale := time.Since(s.fleet.checkedAt) > fleetCacheTTL
+	if (stale || r.URL.Query().Get("refresh") == "1") && !s.fleet.refreshing {
+		s.fleet.refreshing = true
+		go s.refreshFleet()
+	}
+	resp := fleetResponse{Stacks: s.fleet.current(s.manager), Refreshing: s.fleet.refreshing}
+	if !s.fleet.checkedAt.IsZero() {
+		resp.CheckedAt = s.fleet.checkedAt.UTC().Format(time.RFC3339)
+	}
+	s.fleet.mu.Unlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp)
+}
+
+// refreshFleet re-checks every stack against the registry, then swaps the
+// cache in one shot. Serial on purpose: gentle on the registry.
+func (s *server) refreshFleet() {
+	results := map[string]updates.Status{}
+	if stacks, err := s.manager.List(); err == nil {
+		for _, st := range stacks {
+			full, err := s.manager.Get(st.Name)
+			if err != nil {
+				continue
+			}
+			images := resolvedImages(full)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			status, err := updates.Check(ctx, s.backendFor(full), images)
+			cancel()
+			if err != nil {
+				status = updates.Status{State: "unknown"}
+			}
+			results[st.Name] = status
+		}
+	}
+	s.fleet.mu.Lock()
+	s.fleet.results = results
+	s.fleet.checkedAt = time.Now()
+	s.fleet.refreshing = false
+	s.fleet.mu.Unlock()
+}
+
+// current returns the cached results restricted to stacks that still exist,
+// so a deleted stack's "update available" doesn't linger until the next
+// refresh. Caller holds mu.
+func (f *fleetUpdates) current(m *stack.Manager) map[string]updates.Status {
+	stacks, err := m.List()
+	if err != nil {
+		return f.results
+	}
+	out := make(map[string]updates.Status, len(f.results))
+	for _, st := range stacks {
+		if r, ok := f.results[st.Name]; ok {
+			out[st.Name] = r
+		}
+	}
+	return out
+}
+
+// forget drops a stack from the cache (on delete).
+func (f *fleetUpdates) forget(name string) {
+	f.mu.Lock()
+	delete(f.results, name)
+	f.mu.Unlock()
+}

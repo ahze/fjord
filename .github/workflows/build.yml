@@ -1,0 +1,112 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# fjordd is pure Go (CGO off), so a Linux runner cross-compiles the FreeBSD
+# binary directly -- no FreeBSD VM needed. The UI is built with vite, whose
+# output is platform-neutral and gets embedded into the binary (ui/dist).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      GOOS: freebsd
+      GOARCH: amd64
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Cross-compile fjordd (freebsd/amd64)
+        run: |
+          go build -trimpath -ldflags "-s -w" -o fjordd ./cmd/fjordd
+          file fjordd
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: fjordd-freebsd-amd64
+          path: |
+            fjordd
+            packaging/fjordd.rc
+          if-no-files-found: error
+
+  # On a v* tag: publish a GitHub Release with a self-contained source tarball
+  # (vendored Go modules + prebuilt UI, so the FreeBSD port builds offline with
+  # no npm) plus the ready-to-run binary.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build UI
+        working-directory: ui
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Assemble source tarball (vendored deps + prebuilt UI)
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          go mod vendor
+          STAGE="fjord-${VERSION}"
+          rm -rf "$STAGE"; mkdir "$STAGE"
+          git archive HEAD | tar -x -C "$STAGE"       # tracked source
+          cp -R vendor "$STAGE/"                       # offline Go modules
+          mkdir -p "$STAGE/ui"; cp -R ui/dist "$STAGE/ui/"  # prebuilt, embedded UI
+          tar czf "fjord-${VERSION}.tar.gz" "$STAGE"
+
+      - name: Cross-compile binary (freebsd/amd64)
+        env:
+          GOOS: freebsd
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o fjordd ./cmd/fjordd
+
+      - name: Publish release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${{ github.repository }}" \
+            --title "fjord ${VERSION}" \
+            --generate-notes \
+            "fjord-${VERSION}.tar.gz" \
+            fjordd
