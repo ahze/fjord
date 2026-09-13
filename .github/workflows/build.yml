@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v* tag to (re)publish a release for; empty = CI build only"
+        required: false
+        default: ""
 
 # fjordd is pure Go (CGO off), so a Linux runner cross-compiles the FreeBSD
 # binary directly -- no FreeBSD VM needed. The UI is built with vite, whose
@@ -55,12 +60,18 @@ jobs:
   # (vendored Go modules + prebuilt UI, so the FreeBSD port builds offline with
   # no npm) plus the ready-to-run binary.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event.inputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      # The tag being released: the pushed tag, or the one named in a manual run
+      # (which also checks that tag out, so assets match the tag, not main).
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - uses: actions/setup-node@v4
         with:
@@ -81,7 +92,7 @@ jobs:
 
       - name: Assemble source tarball (vendored deps + prebuilt UI)
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${TAG#v}"
           go mod vendor
           STAGE="fjord-${VERSION}"
           rm -rf "$STAGE"; mkdir "$STAGE"
@@ -90,23 +101,35 @@ jobs:
           mkdir -p "$STAGE/ui"; cp -R ui/dist "$STAGE/ui/"  # prebuilt, embedded UI
           tar czf "fjord-${VERSION}.tar.gz" "$STAGE"
 
-      - name: Cross-compile binary (freebsd/amd64)
+      # One binary per FreeBSD arch, named so `fetch .../fjordd-freebsd-$(uname -m)`
+      # picks the right one. The rc script ships alongside.
+      - name: Cross-compile binaries (freebsd/amd64, freebsd/arm64)
         env:
           GOOS: freebsd
-          GOARCH: amd64
           CGO_ENABLED: "0"
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o fjordd ./cmd/fjordd
+          VERSION="${TAG#v}"
+          for arch in amd64 arm64; do
+            GOARCH=$arch go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "fjordd-freebsd-${arch}" ./cmd/fjordd
+          done
+          cp packaging/fjordd.rc fjordd.rc
+          ls -l fjordd-freebsd-* fjordd.rc
 
+      # Create the release, or refresh the assets of an existing one (re-run on
+      # the same tag after a workflow fix) -- never a second release.
       - name: Publish release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          gh release create "${GITHUB_REF_NAME}" \
-            --repo "${{ github.repository }}" \
-            --title "fjord ${VERSION}" \
-            --generate-notes \
-            "fjord-${VERSION}.tar.gz" \
-            fjordd
+          VERSION="${TAG#v}"
+          ASSETS="fjord-${VERSION}.tar.gz fjordd-freebsd-amd64 fjordd-freebsd-arm64 fjordd.rc"
+          if gh release view "${TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" --repo "${{ github.repository }}" --clobber $ASSETS
+          else
+            gh release create "${TAG}" \
+              --repo "${{ github.repository }}" \
+              --title "fjord ${VERSION}" \
+              --generate-notes \
+              $ASSETS
+          fi
