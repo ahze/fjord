@@ -1,14 +1,7 @@
 # Changelog
 
-## 0.2.1 — 2026-09-13
+## 0.2.2 — 2026-09-14
 
-- **Fix:** the pf readiness fixes appended the anchors to the end of
-  `/etc/pf.conf`. On a host with `pass`/`block` rules that put translation
-  after filtering, pf rejected the whole file and the rc script left pf
-  running with nothing loaded — all NAT gone at once. The snippet now
-  inserts before the first filter rule and validates with `pfctl -nf`
-  before loading. If you pasted the 0.2.0 fix: move the anchor lines above
-  your filter rules and `pfctl -f /etc/pf.conf`.
 - **Adopt existing containers.** Containers started outside fjord (by hand,
   Ansible, a script) show up under *Stacks → Adopt existing…* with the
   `compose.yaml` fjord would write from their original run command:
@@ -36,6 +29,16 @@
 - The catatonit readiness check is gone: fjord runs compose without a pod,
   so nothing it starts uses catatonit. The port no longer depends on it
   either.
+
+## 0.2.1 — 2026-09-13
+
+- **Fix:** the pf readiness fixes appended the anchors to the end of
+  `/etc/pf.conf`. On a host with `pass`/`block` rules that put translation
+  after filtering, pf rejected the whole file and the rc script left pf
+  running with nothing loaded — all NAT gone at once. The snippet now
+  inserts before the first filter rule and validates with `pfctl -nf`
+  before loading. If you pasted the 0.2.0 fix: move the anchor lines above
+  your filter rules and `pfctl -f /etc/pf.conf`.
 - Release tarballs are reproducible and never replaced on a re-run.
 
 ## 0.2.0 — 2026-09-13

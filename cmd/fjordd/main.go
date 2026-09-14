@@ -24,7 +24,7 @@ import (
 // version identifies this build; overridden at release time via
 // `go build -ldflags "-X main.version=X.Y.Z"`. Dev builds carry the next
 // version with a -dev suffix so they read as ahead of the last release.
-var version = "0.2.1-dev"
+var version = "0.2.2-dev"
 
 // envOr returns the environment variable key, or def when it is unset/empty.
 // Used to default a flag to its FJORD_* env var.
