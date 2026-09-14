@@ -1,9 +1,9 @@
 // Package doctor probes the host for everything fjord's engines need --
 // binaries, the runtime socket, kernel facilities -- and reports each as a
 // structured pass/fail with a remediation. It exists because a mis-provisioned
-// host fails cryptically at stack-up time (a missing catatonit surfaces as
-// "no such file or directory" from every stack); the doctor names the real
-// problem up front.
+// host fails cryptically at stack-up time (a missing conmon or a stopped
+// podman socket surfaces as a bare error from every stack); the doctor names
+// the real problem up front.
 //
 // Platform knowledge lives only in the platform_<os>.go leaves: each assembles
 // its check list from the portable probes in checks.go. Supporting a new OS

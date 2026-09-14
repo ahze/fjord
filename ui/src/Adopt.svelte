@@ -72,8 +72,8 @@
 </script>
 
 <div class="h-full flex flex-col">
-  <div class="flex items-center justify-between mb-4 shrink-0">
-    <div>
+  <div class="flex items-center justify-between gap-6 mb-4 shrink-0">
+    <div class="max-w-3xl">
       <h2 class="text-2xl font-bold text-white">Adopt existing containers</h2>
       <div class="text-sm text-slate-500">
         Containers and jails on this host that no stack owns — started by hand, a script, or another tool.
@@ -85,7 +85,7 @@
         <button
           on:click={adoptAll}
           disabled={allBusy}
-          class="flex items-center gap-2 bg-fjord-accent hover:bg-fjord-accent-hover text-white font-medium py-2 px-4 rounded-lg text-sm disabled:opacity-50"
+          class="flex items-center gap-2 whitespace-nowrap bg-fjord-accent hover:bg-fjord-accent-hover text-white font-medium py-2 px-4 rounded-lg text-sm disabled:opacity-50"
           >{#if allBusy}<Spinner size={13} /> {progress}{:else}Adopt &amp; replace all ({list.filter((c) => !c.error).length}){/if}</button
         >
       {/if}

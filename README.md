@@ -17,7 +17,7 @@ format carries nothing vendor-specific.
 
 ```sh
 # toolchain the podman engine needs
-pkg install podman py312-podman-compose catatonit conmon ocijail
+pkg install podman sysutils/podman-compose conmon ocijail
 # optional second engine (appjail + its director, which fjord drives)
 pkg install appjail sysutils/py-director
 

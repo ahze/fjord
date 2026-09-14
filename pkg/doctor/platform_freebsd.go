@@ -43,15 +43,6 @@ func platform(cfg Config) platformInfo {
 			Pkg:   map[string]string{"freebsd": "py312-podman-compose"},
 		},
 		{
-			// Without catatonit every compose stack dies with a bare
-			// "no such file or directory" (no pod infra binary).
-			ID: "catatonit", Name: "catatonit", Engine: "podman", HostOnly: true,
-			Probe: binProbe("catatonit"),
-			Why:   "The tiny init that runs as PID 1 inside each pod. Without it every compose stack fails with a bare \"no such file or directory\".",
-			Fix:   "pkg install -y catatonit",
-			Pkg:   map[string]string{"freebsd": "catatonit"},
-		},
-		{
 			ID: "conmon", Name: "conmon", Engine: "podman", HostOnly: true,
 			Probe: binProbe("conmon"),
 			Why:   "The per-container monitor podman starts everything through. It holds a container's I/O and exit status while podman itself isn't running.",

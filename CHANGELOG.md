@@ -33,6 +33,9 @@
 - The browser's Back button walks fjord's own history (stack, store,
   system, settings tab) instead of leaving the site: navigation pushed no
   history entries before.
+- The catatonit readiness check is gone: fjord runs compose without a pod,
+  so nothing it starts uses catatonit. The port no longer depends on it
+  either.
 - Release tarballs are reproducible and never replaced on a re-run.
 
 ## 0.2.0 — 2026-09-13

@@ -45,12 +45,6 @@ func platform(cfg Config) platformInfo {
 				Fix:   "# with your distribution's package manager, e.g.\nsudo apt install -y podman-compose\n# or: sudo dnf install -y podman-compose",
 			},
 			{
-				ID: "catatonit", Name: "catatonit", Engine: "podman", HostOnly: true,
-				Probe: binProbe("catatonit"),
-				Why:   "The tiny init that runs as PID 1 inside each pod. Without it every compose stack fails with a bare \"no such file or directory\".",
-				Fix:   "# with your distribution's package manager, e.g.\nsudo apt install -y catatonit\n# or: sudo dnf install -y catatonit",
-			},
-			{
 				ID: "conmon", Name: "conmon", Engine: "podman", HostOnly: true,
 				Probe: binProbe("conmon"),
 				Why:   "The per-container monitor podman starts everything through. It holds a container's I/O and exit status while podman itself isn't running.",

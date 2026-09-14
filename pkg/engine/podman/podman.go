@@ -54,13 +54,14 @@ func (b *Backend) Up(ctx context.Context, s *stack.Stack) (io.ReadCloser, error)
 }
 
 // bringUp brings a stack up WITHOUT a pod (`podman-compose --in-pod=false`).
-// podman-compose's default pod-per-project is unreliable on FreeBSD: it creates
-// the pod but fails to give it an infra container, so the member container
-// can't join a network namespace and dies with a bogus "no such file or
-// directory". Without a pod each container is standalone and starts cleanly.
-// After that we still `podman start` the stack's containers as a safety net (a
-// no-op when compose already started them). Single-service stacks -- fjord's
-// whole catalog -- don't need a pod's shared netns anyway.
+// podman-compose's default pod-per-project needs an infra container, whose
+// init is catatonit; on a host without it the pod is created with no infra
+// and the member container dies with a bogus "no such file or directory".
+// Without a pod each container is standalone, starts cleanly, and catatonit
+// is not needed at all. After that we still `podman start` the stack's
+// containers as a safety net (a no-op when compose already started them).
+// Single-service stacks -- fjord's whole catalog -- don't need a pod's shared
+// netns anyway.
 func (b *Backend) bringUp(ctx context.Context, pw *io.PipeWriter, s *stack.Stack) {
 	b.removeOrphanStorage(ctx, pw, s.Name)
 	_ = b.runStreaming(ctx, pw, s.Dir, "podman-compose", "--in-pod=false", "up", "-d", "--remove-orphans")
