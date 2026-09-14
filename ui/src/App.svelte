@@ -6,6 +6,7 @@
   import Terminal from './Terminal.svelte';
   import AppStore from './AppStore.svelte';
   import Volumes from './Volumes.svelte';
+  import Adopt from './Adopt.svelte';
   import System from './System.svelte';
   import Settings from './Settings.svelte';
   import SetupWizard from './SetupWizard.svelte';
@@ -69,7 +70,7 @@
   let originalEnv = '';
   let originalDirector = '';
   let originalMakejail = '';
-  let currentView: 'stacks' | 'store' | 'volumes' | 'system' | 'settings' = 'stacks';
+  let currentView: 'stacks' | 'store' | 'volumes' | 'system' | 'settings' | 'adopt' = 'stacks';
   // Settings sub-tab, mirrored into the URL (#/settings/<tab>) like the views.
   let settingsTab: 'storage' | 'extensions' | 'catalogs' | 'advanced' = 'storage';
 
@@ -401,14 +402,19 @@
     // No hint: prefer the RUNNING container's actual published ports (from the
     // status API) -- the saved compose can be ahead of reality, since edits
     // only apply on a recreate. Scheme http: https is only ever hint-declared.
+    // On a macvlan IP nothing is published (hostPort 0): the app answers on
+    // its container port at that IP. Otherwise only real published ports count.
     let ports: string[] = (stack.status?.containers ?? [])
       .flatMap((ct) => ct.ports ?? [])
       .filter((p) => !p.protocol || p.protocol === 'tcp')
-      .map((p) => String(p.hostPort));
+      .map((p) => String(ip ? p.containerPort || p.hostPort : p.hostPort))
+      .filter((p) => p !== '0');
 
-    // Fallback (stack stopped): parse the compose, resolving ${VAR} from .env.
+    // Fallback (stack stopped): the compose's ports list items, resolving
+    // ${VAR} from .env. Anchored to "- host:container" lines so a MAC
+    // address (00:00) or an IP never reads as a port.
     if (!ports.length) {
-      ports = [...c.matchAll(/["']?([\w${}]+):(\d{2,5})(?:\/(tcp|udp))?["']?/g)]
+      ports = [...c.matchAll(/^\s*-\s*["']?([\w${}.]+):(\d{2,5})(?:\/(tcp|udp))?["']?\s*$/gm)]
         .filter((m) => !m[3] || m[3] === 'tcp')
         .map((m) => resolve(m[1]))
         .filter((h) => /^\d{2,5}$/.test(h));
@@ -467,10 +473,14 @@
   // "had to refresh before Start worked" bug). Draft only when neither holds.
   $: isDraft = !!selectedStack && !selectedStack.dir && !stacks.some((s) => s.name === selectedStack?.name);
 
-  // Reflect the current view/stack into the URL hash so it's shareable and
-  // survives a refresh. replaceState doesn't fire hashchange, so no loop.
-  // Derive the URL the SAME way the page renders (selectedStack wins over
-  // currentView) so the address bar always matches what's on screen.
+  // Reflect the current view/stack into the URL hash so it's shareable,
+  // survives a refresh, and the browser's Back button walks fjord's own
+  // history instead of leaving the site (pushState; neither it nor
+  // replaceState fires hashchange, so no loop -- Back does, via
+  // restoreFromHash, and by then the hash already matches). Renaming a
+  // draft only rewrites the current entry. Derive the URL the SAME way the
+  // page renders (selectedStack wins over currentView) so the address bar
+  // always matches what's on screen.
   $: if (routeReady && typeof location !== 'undefined') {
     const h = selectedStack
       ? '#/stacks/' + encodeURIComponent(selectedStack.name)
@@ -478,12 +488,17 @@
         ? '#/store'
         : currentView === 'volumes'
           ? '#/volumes'
+          : currentView === 'adopt'
+            ? '#/adopt'
           : currentView === 'system'
             ? '#/system'
             : currentView === 'settings'
               ? '#/settings/' + settingsTab
               : '#/stacks';
-    if (!setupOpen && location.hash !== h) history.replaceState(null, '', h);
+    if (!setupOpen && location.hash !== h) {
+      const rename = isDraft && location.hash.startsWith('#/stacks/');
+      history[rename ? 'replaceState' : 'pushState'](null, '', h);
+    }
   }
 
   // Update-availability for the selected stack (digest drift vs the registry).
@@ -761,6 +776,9 @@
       await selectStack(null);
     } else if (section === 'volumes') {
       currentView = 'volumes';
+      await selectStack(null);
+    } else if (section === 'adopt') {
+      currentView = 'adopt';
       await selectStack(null);
     } else if (section === 'system') {
       currentView = 'system';
@@ -2112,6 +2130,22 @@
       <div class="p-6 h-full overflow-hidden">
         <Volumes />
       </div>
+    {:else if currentView === 'adopt'}
+      <div class="p-6 h-full overflow-hidden">
+        <Adopt
+          on:back={() => (currentView = 'stacks')}
+          on:adopted={async (e) => {
+            await loadStacks();
+            if (e.detail) {
+              const st = stacks.find((x) => x.name === e.detail);
+              if (st) {
+                await selectStack(st);
+                up(st.name);
+              }
+            }
+          }}
+        />
+      </div>
     {:else if currentView === 'system'}
       <div class="p-6 h-full overflow-hidden">
         <System />
@@ -2130,6 +2164,10 @@
           on:store={() => {
             selectStack(null);
             currentView = 'store';
+          }}
+          on:adopt={() => {
+            selectStack(null);
+            currentView = 'adopt';
           }}
           on:select={(e) => {
             const f = stacks.find((s) => s.name === e.detail) ?? { name: e.detail, dir: '', compose: '', env: '' };

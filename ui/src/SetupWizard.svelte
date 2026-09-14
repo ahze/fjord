@@ -5,6 +5,7 @@
   import { onMount, createEventDispatcher } from 'svelte';
   import Icon from './Icon.svelte';
   import EngineMark from './EngineMark.svelte';
+  import { listCandidates, adoptContainer, startStack, type Candidate } from './adopt';
   import Spinner from './Spinner.svelte';
   import DirPicker from './DirPicker.svelte';
   import FolderRows from './FolderRows.svelte';
@@ -12,7 +13,7 @@
   import { toast } from './toast';
 
   const dispatch = createEventDispatcher<{ done: void }>();
-  const STEPS = ['Welcome', 'Engine', 'Storage', 'Catalog', 'How it works'];
+  const STEPS = ['Welcome', 'Engine', 'Storage', 'Catalog', 'Already running', 'How it works'];
   let step = 0;
 
   // ---- 1. readiness ----
@@ -247,12 +248,49 @@
   }
   $: totalApps = catalogs.reduce((n, c) => n + (c.apps || 0), 0);
 
+  // ---- 4. containers already on the host ----
+  // Anything running that no stack owns can become a stack right here: same
+  // image, mounts, network address and name. The step is skipped when there
+  // is nothing to adopt.
+  let candidates: Candidate[] = [];
+  let picked: Record<string, boolean> = {};
+  let adopting = false;
+  let adoptProgress = '';
+  let adoptedCount = 0;
+  async function loadCandidates() {
+    candidates = await listCandidates();
+    for (const c of candidates) if (!c.error) picked[c.name] = true;
+  }
+  async function adoptPicked() {
+    const todo = candidates.filter((c) => picked[c.name] && !c.error);
+    if (!todo.length) return;
+    adopting = true;
+    let failed = 0;
+    for (const [i, c] of todo.entries()) {
+      adoptProgress = `${i + 1} / ${todo.length}: ${c.name}`;
+      try {
+        const id = await adoptContainer(c, true);
+        await startStack(id);
+        adoptedCount++;
+      } catch (e: any) {
+        failed++;
+        toast(`${c.name}: ${e.message}`, { kind: 'error' });
+      }
+    }
+    adopting = false;
+    adoptProgress = '';
+    toast(failed ? `Adopted ${todo.length - failed}, ${failed} failed` : `Adopted ${todo.length} container${todo.length === 1 ? '' : 's'}`, { kind: failed ? 'error' : 'success' });
+    await loadCandidates();
+  }
+
   // ---- navigation ----
   let finishing = false;
   async function next() {
     if (step === 1 && !(await saveEngine())) return;
     if (step === 2 && !(await saveStorage())) return;
+    if (step === 3) await loadCandidates();
     step = Math.min(step + 1, STEPS.length - 1);
+    if (step === 4 && !candidates.length) step = 5; // nothing to adopt
   }
   function back() {
     step = Math.max(step - 1, 0);
@@ -492,6 +530,38 @@
             ><Icon name="plus" size={12} /> Re-add the daemonless catalog</button
           >
         {/if}
+      {:else if step === 4}
+        <h2 class="text-2xl font-bold text-white mb-2">Already running on this host</h2>
+        <p class="text-sm text-slate-400 mb-5">
+          These containers and jails were started outside fjord. Adopting one turns what the engine recorded
+          into a stack — same image, mounts, network address and name — and starts it in place of the old one.
+          Data stays where it is. Untick anything you'd rather leave alone; you can adopt later from the Stacks
+          page.
+        </p>
+        <div class="border border-fjord-border rounded-xl overflow-hidden divide-y divide-fjord-border mb-4 max-w-2xl">
+          {#each candidates as c (c.engine + ':' + c.id)}
+            <label class="flex items-center gap-3 px-4 py-2.5 {c.error ? 'opacity-60' : 'cursor-pointer hover:bg-fjord-border/40'}">
+              <input type="checkbox" bind:checked={picked[c.name]} disabled={!!c.error || adopting} class="accent-fjord-accent" />
+              <EngineMark engine={c.engine} size={14} />
+              <span class="min-w-0 flex-1">
+                <span class="text-sm text-slate-200">{c.name}</span>
+                <span class="block text-xs text-slate-500 font-mono truncate">{c.image}</span>
+                {#if c.error}<span class="block text-xs text-fjord-danger">{c.error}</span>{/if}
+                {#each c.notes || [] as n}<span class="block text-xs text-fjord-warning">{n}</span>{/each}
+              </span>
+              <span class="text-[10px] font-semibold uppercase tracking-wide {c.state === 'running' ? 'text-fjord-success' : 'text-slate-500'}">{c.state}</span>
+            </label>
+          {/each}
+        </div>
+        <button
+          on:click={adoptPicked}
+          disabled={adopting || !candidates.some((c) => picked[c.name] && !c.error)}
+          class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-fjord-accent hover:bg-fjord-accent-hover text-white disabled:opacity-50"
+          >{#if adopting}<Spinner size={13} /> {adoptProgress}{:else}Adopt &amp; replace selected{/if}</button
+        >
+        {#if adoptedCount}
+          <p class="text-xs text-fjord-success mt-3">{adoptedCount} adopted — they're on the Stacks page.</p>
+        {/if}
       {:else}
         <h2 class="text-2xl font-bold text-white mb-2">How it works</h2>
         <div class="space-y-3 mb-2">
@@ -522,7 +592,7 @@
           <button on:click={finish} disabled={finishing} class="px-3 py-2 rounded-lg text-sm font-medium text-slate-500 hover:text-slate-300">Skip setup</button>
           <button
             on:click={next}
-            disabled={savingStorage || savingEngine}
+            disabled={savingStorage || savingEngine || adopting}
             class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-fjord-accent hover:bg-fjord-accent-hover text-white disabled:opacity-50"
             >{#if savingStorage || savingEngine}<Spinner size={13} />{/if}Continue <Icon name="chevron-right" size={14} /></button
           >

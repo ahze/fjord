@@ -119,3 +119,22 @@ func TestResolveRejectsDatasetTraversal(t *testing.T) {
 		t.Fatalf("absolute override: %v %v", err, res)
 	}
 }
+
+func TestWebContainerPort(t *testing.T) {
+	m, err := Parse(radarrManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.WebPort = "${WEB_PORT}"
+	if got := m.WebContainerPort(); got != "7878" {
+		t.Errorf("container side of ${WEB_PORT}:7878 = %q, want 7878", got)
+	}
+	m.WebPort = "8443"
+	if got := m.WebContainerPort(); got != "8443" {
+		t.Errorf("literal = %q, want 8443", got)
+	}
+	m.WebPort = "${NOPE}"
+	if got := m.WebContainerPort(); got != "" {
+		t.Errorf("unknown var = %q, want empty", got)
+	}
+}

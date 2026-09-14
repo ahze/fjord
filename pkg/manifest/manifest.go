@@ -6,6 +6,8 @@ package manifest
 import (
 	"bytes"
 	"fmt"
+	"regexp"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -49,6 +51,45 @@ type AppjailBundle struct {
 // Compose returns the compose YAML with the x-fjord block removed and the
 // ${VAR} placeholders left in place (podman-compose substitutes them from .env).
 func (m *Manifest) Compose() string { return m.compose }
+
+// WebContainerPort is the port the web UI listens on inside the container:
+// the container side of the ports entry published as WebPort. WebPort is a
+// host-side value (usually "${WEB_PORT}"), which is meaningless for a stack
+// on a macvlan address, where the app answers on its own port. Falls back to
+// the variable's default, then a literal WebPort; "" when unknown.
+func (m *Manifest) WebContainerPort() string {
+	if m.WebPort == "" {
+		return ""
+	}
+	re := regexp.MustCompile(`(?m)^\s*-\s*["']?` + regexp.QuoteMeta(m.WebPort) + `:(\d{2,5})(?:/tcp)?["']?\s*$`)
+	if mm := re.FindStringSubmatch(m.compose); mm != nil {
+		return mm[1]
+	}
+	if name := strings.TrimSuffix(strings.TrimPrefix(m.WebPort, "${"), "}"); name != m.WebPort {
+		for _, v := range m.Variables {
+			if v.Name == name && isPort(v.Default) {
+				return v.Default
+			}
+		}
+		return ""
+	}
+	if isPort(m.WebPort) {
+		return m.WebPort
+	}
+	return ""
+}
+
+func isPort(s string) bool {
+	if len(s) < 2 || len(s) > 5 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
 
 // Appjail returns the AppJail director bundle, or nil when the app declares no
 // appjail support (appjail: false, or no bundle was rendered at catalog time).

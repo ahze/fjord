@@ -127,6 +127,36 @@ type Descriptor struct {
 	New       func() Backend
 }
 
+// Unmanaged is a container the engine runs that no fjord stack owns -- one
+// started by hand or by another tool -- with what it takes to adopt it as a
+// stack: podman hands over the argv it was created from (RunArgs), appjail
+// converts the jail itself (Spec). Unadoptable, when set, says why neither
+// is possible. Project names a runtime-side grouping made outside fjord (a
+// director project), so the handler can tell fjord's own jails apart.
+type Unmanaged struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Image       string     `json:"image"`
+	State       string     `json:"state"`
+	Project     string     `json:"project,omitempty"`
+	RunArgs     []string   `json:"-"`
+	Spec        *AdoptSpec `json:"-"`
+	Unadoptable string     `json:"-"`
+}
+
+// AdoptSpec is the stack an unmanaged container becomes: a compose file and
+// .env always (the UI, status and the Open link read those), plus the
+// director bundle for a jail on the appjail engine.
+type AdoptSpec struct {
+	Service  string
+	Compose  string
+	Env      string
+	Director string // appjail-director.yml
+	Makejail string
+	Template string // template.conf: the jail parameters
+	Notes    []string
+}
+
 // DiskRow is one category of the runtime's disk-usage report (podman system df):
 // how much space it holds and how much is reclaimable. Human strings are for
 // display; RawReclaimable is bytes for sizing/decisions.

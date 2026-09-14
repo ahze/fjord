@@ -72,9 +72,12 @@
     const real = (status?.containers ?? [])
       .flatMap((c) => c.ports ?? [])
       .filter((p) => !p.protocol || p.protocol === 'tcp');
-    if (real[0]) return `http://${host}:${real[0].hostPort}`;
+    const port0 = real.map((p) => (ip ? p.containerPort || p.hostPort : p.hostPort)).find((p) => p && p !== 0);
+    if (port0) return `http://${host}:${port0}`;
+    // Compose fallback: ports list items only, so a MAC address never
+    // reads as a port (00:00 -> ":0").
     const port =
-      (compose.match(/["']?(\d{2,5}):\d{2,5}["']?/) || [])[1] ||
+      (compose.match(/^\s*-\s*["']?(\d{2,5}):\d{2,5}(?:\/tcp)?["']?\s*$/m) || [])[1] ||
       (compose.match(/published:\s*["']?(\d+)/) || [])[1];
     return port ? `http://${host}:${port}` : '';
   }
@@ -118,11 +121,19 @@
           · <span class="text-fjord-warning">{updateCount} update{updateCount === 1 ? '' : 's'} available</span>{/if}
       </div>
     </div>
-    <button
-      on:click={() => dispatch('new')}
-      class="flex items-center gap-2 bg-fjord-accent hover:bg-fjord-accent-hover text-white font-medium py-2 px-4 rounded-lg text-sm"
-      ><Icon name="plus" size={14} /> New Stack</button
-    >
+    <div class="flex items-center gap-2">
+      <button
+        on:click={() => dispatch('adopt')}
+        title="Turn containers started outside fjord into stacks"
+        class="flex items-center gap-2 bg-fjord-border hover:bg-fjord-accent hover:text-white text-slate-300 font-medium py-2 px-4 rounded-lg text-sm"
+        ><Icon name="download" size={14} /> Adopt existing…</button
+      >
+      <button
+        on:click={() => dispatch('new')}
+        class="flex items-center gap-2 bg-fjord-accent hover:bg-fjord-accent-hover text-white font-medium py-2 px-4 rounded-lg text-sm"
+        ><Icon name="plus" size={14} /> New Stack</button
+      >
+    </div>
   </div>
 
   <div class="flex-1 overflow-y-auto">
@@ -130,9 +141,11 @@
       <EmptyState
         icon="stack"
         title="No Stacks"
-        description="Install an app from the store, or create a stack from a compose file."
+        description="Install an app from the store, adopt the containers already running on this host, or create a stack from a compose file."
         actionLabel="Open App Store"
+        secondaryLabel="Adopt existing containers"
         on:action={() => dispatch('store')}
+        on:secondary={() => dispatch('adopt')}
       />
     {:else}
       <div class="border border-fjord-border rounded-xl overflow-hidden divide-y divide-fjord-border bg-fjord-card">

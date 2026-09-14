@@ -9,6 +9,30 @@
   inserts before the first filter rule and validates with `pfctl -nf`
   before loading. If you pasted the 0.2.0 fix: move the anchor lines above
   your filter rules and `pfctl -f /etc/pf.conf`.
+- **Adopt existing containers.** Containers started outside fjord (by hand,
+  Ansible, a script) show up under *Stacks → Adopt existing…* with the
+  `compose.yaml` fjord would write from their original run command:
+  image, mounts, ports, env (PUID/PGID/TZ move to `.env`), devices,
+  capabilities, annotations, labels, macvlan network with the same IP and
+  MAC, or `network_mode: host`/`none`. *Adopt & replace* removes the
+  container and starts the stack in its place under the same name; *Adopt*
+  alone creates it stopped. *Adopt & replace all* converts a whole host,
+  and the setup wizard offers the same step when unmanaged containers
+  exist. The catalog icon and web port come along when the image is a
+  catalog app.
+- **Adopt existing jails** on the AppJail engine too. A jail made with
+  `appjail quick`/`appjail oci` or by an appjail-director project outside
+  fjord is read back (image, virtual network and address, NAT, exposes,
+  fstab mounts, OCI env/user/entrypoint, jail parameters) into a director
+  bundle, the same shape catalog installs use, and comes back under the
+  same jail name. Thick jails without an OCI image are listed with the
+  reason they can't be adopted. Resource limits and custom devfs rules are
+  not carried over and are noted.
+- Open link on macvlan stacks uses the container's own port instead of a
+  published one (there is none), so it no longer opens `:0`.
+- The browser's Back button walks fjord's own history (stack, store,
+  system, settings tab) instead of leaving the site: navigation pushed no
+  history entries before.
 - Release tarballs are reproducible and never replaced on a re-run.
 
 ## 0.2.0 — 2026-09-13
